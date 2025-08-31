@@ -107,12 +107,68 @@ st.markdown(f"""
 # Main title with theme toggle
 col_title, col_theme = st.columns([10, 1])
 with col_title:
-    st.markdown("# 📊 Trading Comparator Pro - Enhanced")
+    st.markdown("# 📊 Trading Comparator Pro")
     st.markdown("### Advanced analysis with anomaly detection and order matching")
 with col_theme:
     st.button("🌓", on_click=toggle_theme, help="Toggle Dark/Light Mode")
 
 st.markdown("---")
+
+
+# Function to generate synthetic data with noise
+def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2):
+    """Generate a synthetic dataset based on original with added noise"""
+    noisy_df = original_df.copy()
+
+    # Add price noise
+    if 'Price' in noisy_df.columns:
+        price_noise = np.random.normal(1, noise_level, len(noisy_df))
+        noisy_df['Price'] = noisy_df['Price'] * price_noise
+
+    # Add quantity noise
+    if 'Quantity' in noisy_df.columns:
+        quantity_noise = np.random.normal(1, noise_level / 2, len(noisy_df))
+        noisy_df['Quantity'] = (noisy_df['Quantity'] * quantity_noise).astype(int)
+        noisy_df['Quantity'] = noisy_df['Quantity'].clip(lower=1)  # Ensure positive quantities
+
+    # Recalculate Value
+    if 'Value' in noisy_df.columns and 'Price' in noisy_df.columns and 'Quantity' in noisy_df.columns:
+        noisy_df['Value'] = noisy_df['Price'] * noisy_df['Quantity']
+
+    # Add time variation (shift times by random minutes)
+    if 'Time' in noisy_df.columns:
+        time_shifts = np.random.randint(-30, 30, len(noisy_df))
+        noisy_df['Time'] = noisy_df['Time'] + pd.to_timedelta(time_shifts, unit='min')
+
+    # Randomly change some order statuses
+    if 'Status' in noisy_df.columns:
+        status_mask = np.random.random(len(noisy_df)) < 0.1  # 10% chance to change status
+        statuses = ['Filled', 'Partial', 'Cancelled']
+        noisy_df.loc[status_mask, 'Status'] = np.random.choice(statuses, sum(status_mask))
+
+    # Add/remove some orders (order variation)
+    n_orders_to_modify = int(len(noisy_df) * order_variation)
+
+    # Remove some orders
+    if n_orders_to_modify > 0:
+        indices_to_remove = np.random.choice(noisy_df.index, size=min(n_orders_to_modify // 2, len(noisy_df) // 4),
+                                             replace=False)
+        noisy_df = noisy_df.drop(indices_to_remove)
+
+    # Add some duplicate orders with modifications
+    if n_orders_to_modify > 0 and len(noisy_df) > 0:
+        indices_to_duplicate = np.random.choice(noisy_df.index, size=min(n_orders_to_modify // 2, len(noisy_df) // 4),
+                                                replace=True)
+        duplicated = noisy_df.loc[indices_to_duplicate].copy()
+
+        # Modify duplicated orders
+        duplicated['Price'] = duplicated['Price'] * np.random.normal(1, noise_level * 2, len(duplicated))
+        duplicated['Time'] = duplicated['Time'] + pd.to_timedelta(np.random.randint(1, 60, len(duplicated)), unit='min')
+        duplicated['Value'] = duplicated['Price'] * duplicated['Quantity']
+
+        noisy_df = pd.concat([noisy_df, duplicated]).sort_values('Time').reset_index(drop=True)
+
+    return noisy_df
 
 
 # Function to load and prepare data
@@ -280,6 +336,44 @@ with st.sidebar:
         help="Select the CSV file with live account orders"
     )
 
+    # Test data generation option
+    st.markdown("---")
+    st.markdown("### 🧪 Test Data Generator")
+
+    if (demo_file and not live_file) or (live_file and not demo_file):
+        st.info("📌 Only one file uploaded. You can generate test data for comparison.")
+
+        if st.checkbox("Generate synthetic comparison data"):
+            noise_level = st.slider(
+                "Price noise level (%)",
+                min_value=1,
+                max_value=20,
+                value=5,
+                help="Amount of random price variation to add"
+            ) / 100
+
+            order_variation = st.slider(
+                "Order variation (%)",
+                min_value=5,
+                max_value=50,
+                value=20,
+                help="Percentage of orders to add/remove"
+            ) / 100
+
+            if st.button("🎲 Generate Test Data"):
+                if demo_file:
+                    source_df = load_data(demo_file)
+                    if source_df is not None:
+                        synthetic_live_df = generate_noisy_data(source_df, noise_level, order_variation)
+                        st.session_state['synthetic_live'] = synthetic_live_df
+                        st.success("✅ Synthetic LIVE data generated!")
+                else:
+                    source_df = load_data(live_file)
+                    if source_df is not None:
+                        synthetic_demo_df = generate_noisy_data(source_df, noise_level, order_variation)
+                        st.session_state['synthetic_demo'] = synthetic_demo_df
+                        st.success("✅ Synthetic DEMO data generated!")
+
     st.markdown("---")
     st.markdown("### ⚙️ Analysis Options")
 
@@ -333,10 +427,23 @@ with st.sidebar:
     show_time_analysis = st.checkbox("Time analysis", value=True)
 
 # Main application body
-if demo_file and live_file:
-    # Load data
-    demo_df = load_data(demo_file)
-    live_df = load_data(live_file)
+# Check for actual files or synthetic data
+has_demo_data = demo_file or ('synthetic_demo' in st.session_state)
+has_live_data = live_file or ('synthetic_live' in st.session_state)
+
+if has_demo_data and has_live_data:
+    # Load data (real or synthetic)
+    if demo_file:
+        demo_df = load_data(demo_file)
+    else:
+        demo_df = st.session_state['synthetic_demo']
+        st.info("📊 Using synthetic DEMO data for comparison")
+
+    if live_file:
+        live_df = load_data(live_file)
+    else:
+        live_df = st.session_state['synthetic_live']
+        st.info("📊 Using synthetic LIVE data for comparison")
 
     if demo_df is not None and live_df is not None:
         # Apply filters
@@ -432,7 +539,7 @@ if demo_file and live_file:
                     color_discrete_sequence=px.colors.sequential.Blues_r
                 )
                 fig_demo_type.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_demo_type, use_container_width=True)
+                st.plotly_chart(fig_demo_type, width='stretch')
 
             with col2:
                 st.markdown("### 📊 Order Type Distribution - LIVE")
@@ -443,7 +550,7 @@ if demo_file and live_file:
                     color_discrete_sequence=px.colors.sequential.Purples_r
                 )
                 fig_live_type.update_traces(textposition='inside', textinfo='percent+label')
-                st.plotly_chart(fig_live_type, use_container_width=True)
+                st.plotly_chart(fig_live_type, width='stretch')
 
         with tabs[1]:  # Anomaly Detection Tab
             st.markdown("## 🔍 Anomaly Detection & Alerts")
@@ -519,7 +626,7 @@ if demo_file and live_file:
                         title="Anomalies by Severity",
                         color_discrete_map={'High': '#ef4444', 'Medium': '#f59e0b', 'Low': '#3b82f6'}
                     )
-                    st.plotly_chart(fig_severity, use_container_width=True)
+                    st.plotly_chart(fig_severity, width='stretch')
 
                 with col2:
                     fig_type = px.bar(
@@ -530,13 +637,13 @@ if demo_file and live_file:
                         color_continuous_scale='Reds'
                     )
                     fig_type.update_layout(showlegend=False)
-                    st.plotly_chart(fig_type, use_container_width=True)
+                    st.plotly_chart(fig_type, width='stretch')
 
                 # Detailed anomaly table
                 st.markdown("### 📋 Anomaly Details Table")
                 st.dataframe(
                     anomalies_df[['Type', 'Severity', 'Symbol', 'Details']],
-                    use_container_width=True
+                    width='stretch'
                 )
 
         with tabs[2]:  # Order Matching Tab
@@ -586,7 +693,7 @@ if demo_file and live_file:
                 },
                 title="Order Matching Results"
             )
-            st.plotly_chart(fig_matching, use_container_width=True)
+            st.plotly_chart(fig_matching, width='stretch')
 
             # Matched orders analysis
             if not matched_orders.empty:
@@ -604,7 +711,7 @@ if demo_file and live_file:
                         nbins=30,
                         title="Slippage Distribution"
                     )
-                    st.plotly_chart(fig_slippage, use_container_width=True)
+                    st.plotly_chart(fig_slippage, width='stretch')
 
                 with col2:
                     avg_time_diff = matched_orders['Time_Diff_Min'].mean()
@@ -617,7 +724,7 @@ if demo_file and live_file:
                         nbins=20,
                         title="Time Difference Distribution"
                     )
-                    st.plotly_chart(fig_time_diff, use_container_width=True)
+                    st.plotly_chart(fig_time_diff, width='stretch')
 
                 # Best and worst matches
                 st.markdown("### 🎯 Match Quality")
@@ -628,14 +735,14 @@ if demo_file and live_file:
                     best_matches = matched_orders.nsmallest(5, 'Price_Diff_%')[
                         ['Symbol', 'Type', 'Price_Diff_%', 'Time_Diff_Min']
                     ]
-                    st.dataframe(best_matches, use_container_width=True)
+                    st.dataframe(best_matches, width='stretch')
 
                 with col2:
                     st.markdown("#### ⚠️ Worst Matches (Highest Slippage)")
                     worst_matches = matched_orders.nlargest(5, 'Price_Diff_%')[
                         ['Symbol', 'Type', 'Price_Diff_%', 'Time_Diff_Min']
                     ]
-                    st.dataframe(worst_matches, use_container_width=True)
+                    st.dataframe(worst_matches, width='stretch')
 
                 # Detailed matched orders table
                 with st.expander("📋 View All Matched Orders"):
@@ -649,7 +756,7 @@ if demo_file and live_file:
                             'Slippage': '${:.4f}',
                             'Price_Diff_%': '{:.2f}%'
                         }),
-                        use_container_width=True
+                        width='stretch'
                     )
 
             # Unmatched orders analysis
@@ -667,7 +774,7 @@ if demo_file and live_file:
                         'Price': 'mean'
                     }).round(2)
                     unmatched_demo_summary.columns = ['Count', 'Total Value', 'Avg Price']
-                    st.dataframe(unmatched_demo_summary, use_container_width=True)
+                    st.dataframe(unmatched_demo_summary, width='stretch')
                 else:
                     st.success("All demo orders matched!")
 
@@ -681,7 +788,7 @@ if demo_file and live_file:
                         'Price': 'mean'
                     }).round(2)
                     unmatched_live_summary.columns = ['Count', 'Total Value', 'Avg Price']
-                    st.dataframe(unmatched_live_summary, use_container_width=True)
+                    st.dataframe(unmatched_live_summary, width='stretch')
                 else:
                     st.success("All live orders matched!")
 
@@ -706,7 +813,7 @@ if demo_file and live_file:
                     go.Bar(name='Live', x=['Fill Rate'], y=[live_fill_rate], marker_color='crimson')
                 ])
                 fig_fill.update_layout(yaxis_title="Percentage (%)", showlegend=True, height=300)
-                st.plotly_chart(fig_fill, use_container_width=True)
+                st.plotly_chart(fig_fill, width='stretch')
 
                 st.metric("Fill Rate Difference", f"{live_fill_rate - demo_fill_rate:.2f}%")
 
@@ -720,7 +827,7 @@ if demo_file and live_file:
                     go.Bar(name='Live', x=['Average Volume'], y=[live_avg_volume], marker_color='darkorange')
                 ])
                 fig_avg.update_layout(yaxis_title="Volume ($)", showlegend=True, height=300)
-                st.plotly_chart(fig_avg, use_container_width=True)
+                st.plotly_chart(fig_avg, width='stretch')
 
                 diff_percent = ((live_avg_volume / demo_avg_volume - 1) * 100) if demo_avg_volume > 0 else 0
                 st.metric("Average Volume Difference", f"{diff_percent:.2f}%")
@@ -752,7 +859,7 @@ if demo_file and live_file:
                 hovermode='x unified',
                 height=400
             )
-            st.plotly_chart(fig_evolution, use_container_width=True)
+            st.plotly_chart(fig_evolution, width='stretch')
 
         with tabs[4]:  # Time Analysis Tab
             if show_time_analysis:
@@ -775,7 +882,7 @@ if demo_file and live_file:
                         yaxis_title="Number of Orders",
                         showlegend=False
                     )
-                    st.plotly_chart(fig_hour_demo, use_container_width=True)
+                    st.plotly_chart(fig_hour_demo, width='stretch')
 
                 with col2:
                     st.markdown("### 🕐 Activity by Hour - LIVE")
@@ -791,7 +898,7 @@ if demo_file and live_file:
                         yaxis_title="Number of Orders",
                         showlegend=False
                     )
-                    st.plotly_chart(fig_hour_live, use_container_width=True)
+                    st.plotly_chart(fig_hour_live, width='stretch')
 
                 # Heatmap by day of week
                 st.markdown("### 📅 Heatmap - Activity by Day")
@@ -813,7 +920,7 @@ if demo_file and live_file:
                     aspect='auto'
                 )
                 fig_heatmap.update_layout(title="Order Distribution (Demo)")
-                st.plotly_chart(fig_heatmap, use_container_width=True)
+                st.plotly_chart(fig_heatmap, width='stretch')
 
         with tabs[5]:  # Symbol Details Tab
             st.markdown("## 🎯 Detailed Analysis by Symbol")
@@ -843,7 +950,7 @@ if demo_file and live_file:
                             nbins=20,
                             title="Price Distribution"
                         )
-                        st.plotly_chart(fig_price_demo, use_container_width=True)
+                        st.plotly_chart(fig_price_demo, width='stretch')
                     else:
                         st.warning("No data for this symbol in demo")
 
@@ -862,7 +969,7 @@ if demo_file and live_file:
                             nbins=20,
                             title="Price Distribution"
                         )
-                        st.plotly_chart(fig_price_live, use_container_width=True)
+                        st.plotly_chart(fig_price_live, width='stretch')
                     else:
                         st.warning("No data for this symbol in live")
 
@@ -896,7 +1003,7 @@ if demo_file and live_file:
                         hovermode='x unified',
                         height=400
                     )
-                    st.plotly_chart(fig_price_evolution, use_container_width=True)
+                    st.plotly_chart(fig_price_evolution, width='stretch')
 
         # Display raw data if requested
         if show_raw_data:
@@ -907,32 +1014,27 @@ if demo_file and live_file:
 
             with col1:
                 st.markdown("### DEMO Data")
-                st.dataframe(demo_df, use_container_width=True, height=400)
+                st.dataframe(demo_df, width='stretch', height=400)
 
             with col2:
                 st.markdown("### LIVE Data")
-                st.dataframe(live_df, use_container_width=True, height=400)
+                st.dataframe(live_df, width='stretch', height=400)
 
 else:
     # Welcome message if no files are loaded
     st.markdown("""
     <div style='text-align: center; padding: 50px; background-color: #f8fafc; border-radius: 15px;'>
-        <h2 style='color: #667eea;'>👋 Welcome to Trading Comparator Pro - Enhanced Edition</h2>
+        <h2 style='color: #667eea;'>👋 Welcome to Trading Comparator Pro</h2>
         <p style='font-size: 18px; color: #64748b;'>
             Advanced trading analysis with anomaly detection and order matching
         </p>
         <p style='font-size: 16px; color: #94a3b8;'>
             📁 Expected format: CSV with columns Time, Symbol, Price, Quantity, Type, Status, Value, Tag
         </p>
-        <div style='margin-top: 30px; padding: 20px; background-color: white; border-radius: 10px;'>
-            <h3 style='color: #667eea;'>✨ New Features</h3>
-            <ul style='text-align: left; color: #64748b;'>
-                <li>🔍 <strong>Anomaly Detection</strong>: Automatic detection of price divergences, volume anomalies, and execution issues</li>
-                <li>🔗 <strong>Order Matching</strong>: Smart matching engine to reconcile demo and live orders</li>
-                <li>🎨 <strong>Enhanced UX</strong>: Dark/Light mode, advanced filters, and customizable parameters</li>
-                <li>📊 <strong>Slippage Analysis</strong>: Track execution quality between demo and live</li>
-                <li>⚠️ <strong>Real-time Alerts</strong>: Severity-based anomaly notifications</li>
-            </ul>
+        <div style='margin-top: 20px; padding: 15px; background-color: #e0f2fe; border-radius: 8px;'>
+            <p style='color: #0369a1; font-weight: bold;'>
+                💡 Tip: Upload one file to generate synthetic test data for comparison!
+            </p>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -949,4 +1051,4 @@ else:
             'Value': [15025.00, 140025.00, 28556.25],
             'Tag': ['Strategy1', 'Strategy2', 'Strategy1']
         })
-        st.dataframe(example_data, use_container_width=True)
+        st.dataframe(example_data, width='stretch')
