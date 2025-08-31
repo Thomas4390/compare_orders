@@ -126,21 +126,30 @@ def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2):
     """Generate a synthetic dataset based on original with added noise"""
     noisy_df = original_df.copy()
 
-    # Add price noise (smaller variation)
-    if 'Price' in noisy_df.columns:
-        # Use uniform distribution for more controlled noise
-        price_noise = np.random.uniform(1 - noise_level, 1 + noise_level, len(noisy_df))
-        noisy_df['Price'] = noisy_df['Price'] * price_noise
+    # Store original values for comparison
+    original_total_value = noisy_df['Value'].sum() if 'Value' in noisy_df.columns else 0
 
-    # Add quantity noise (very small variation, only ±10% of the noise level)
+    # Add price noise (controlled variation)
+    if 'Price' in noisy_df.columns:
+        # Apply noise to each price individually to avoid compound effects
+        for idx in noisy_df.index:
+            # Small random variation for each price
+            price_factor = np.random.uniform(1 - noise_level, 1 + noise_level)
+            noisy_df.loc[idx, 'Price'] = noisy_df.loc[idx, 'Price'] * price_factor
+
+    # Keep quantities mostly the same with very minor changes
+    # Only change quantities for a small percentage of orders
     if 'Quantity' in noisy_df.columns:
-        # Much smaller noise for quantities to avoid huge volume changes
-        quantity_variation = noise_level * 0.2  # Only 20% of the noise level
-        quantity_noise = np.random.uniform(1 - quantity_variation, 1 + quantity_variation, len(noisy_df))
-        noisy_df['Quantity'] = np.round(noisy_df['Quantity'] * quantity_noise).astype(int)
-        noisy_df['Quantity'] = noisy_df['Quantity'].clip(lower=1)  # Ensure positive quantities
+        # Only modify 10% of quantities
+        quantity_change_mask = np.random.random(len(noisy_df)) < 0.1
+        for idx in noisy_df[quantity_change_mask].index:
+            # Very small change: ±1 or ±2 units, not percentage based
+            quantity_change = np.random.choice([-2, -1, 0, 1, 2])
+            new_quantity = noisy_df.loc[idx, 'Quantity'] + quantity_change
+            noisy_df.loc[idx, 'Quantity'] = max(1, new_quantity)  # Ensure at least 1
 
     # Recalculate Value based on new Price and Quantity
+    # This ensures Value is always consistent with Price * Quantity
     if 'Value' in noisy_df.columns and 'Price' in noisy_df.columns and 'Quantity' in noisy_df.columns:
         noisy_df['Value'] = noisy_df['Price'] * noisy_df['Quantity']
 
@@ -156,29 +165,47 @@ def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2):
         noisy_df.loc[status_mask, 'Status'] = np.random.choice(statuses, sum(status_mask))
 
     # Add/remove some orders (order variation) - more conservative
-    n_orders_to_remove = int(len(noisy_df) * order_variation * 0.3)  # Remove fewer orders
-    n_orders_to_add = int(len(noisy_df) * order_variation * 0.3)  # Add fewer orders
+    n_orders_to_remove = int(len(noisy_df) * order_variation * 0.5)  # Remove some orders
+    n_orders_to_add = int(len(noisy_df) * order_variation * 0.5)  # Add some orders
 
-    # Remove some orders
-    if n_orders_to_remove > 0:
-        indices_to_remove = np.random.choice(noisy_df.index, size=min(n_orders_to_remove, len(noisy_df) // 10),
-                                             replace=False)
+    # Remove some orders randomly
+    if n_orders_to_remove > 0 and len(noisy_df) > n_orders_to_remove:
+        indices_to_remove = np.random.choice(noisy_df.index, size=n_orders_to_remove, replace=False)
         noisy_df = noisy_df.drop(indices_to_remove)
 
-    # Add some orders with slight modifications
+    # Add some orders by duplicating and slightly modifying existing ones
     if n_orders_to_add > 0 and len(noisy_df) > 0:
-        indices_to_duplicate = np.random.choice(noisy_df.index, size=min(n_orders_to_add, len(noisy_df) // 10),
-                                                replace=True)
+        # Select random orders to duplicate
+        indices_to_duplicate = np.random.choice(noisy_df.index, size=n_orders_to_add, replace=True)
         duplicated = noisy_df.loc[indices_to_duplicate].copy()
 
-        # Modify duplicated orders with smaller variations
-        duplicated['Price'] = duplicated['Price'] * np.random.uniform(1 - noise_level, 1 + noise_level, len(duplicated))
-        duplicated['Time'] = duplicated['Time'] + pd.to_timedelta(np.random.randint(5, 30, len(duplicated)), unit='min')
-        duplicated['Quantity'] = np.round(duplicated['Quantity'] * np.random.uniform(0.9, 1.1, len(duplicated))).astype(
-            int).clip(lower=1)
+        # Modify duplicated orders slightly
+        for idx in duplicated.index:
+            # Small price variation
+            duplicated.loc[idx, 'Price'] = duplicated.loc[idx, 'Price'] * np.random.uniform(0.98, 1.02)
+            # Keep same quantity or change by ±1
+            duplicated.loc[idx, 'Quantity'] = duplicated.loc[idx, 'Quantity'] + np.random.choice([-1, 0, 1])
+            duplicated.loc[idx, 'Quantity'] = max(1, duplicated.loc[idx, 'Quantity'])
+            # Shift time slightly
+            duplicated.loc[idx, 'Time'] = duplicated.loc[idx, 'Time'] + pd.timedelta(minutes=np.random.randint(5, 30))
+
+        # Recalculate Value for duplicated orders
         duplicated['Value'] = duplicated['Price'] * duplicated['Quantity']
 
-        noisy_df = pd.concat([noisy_df, duplicated]).sort_values('Time').reset_index(drop=True)
+        # Combine and sort
+        noisy_df = pd.concat([noisy_df, duplicated], ignore_index=True).sort_values('Time').reset_index(drop=True)
+
+    # Final check: ensure the total volume hasn't changed too dramatically
+    if 'Value' in noisy_df.columns and original_total_value > 0:
+        new_total_value = noisy_df['Value'].sum()
+        ratio = new_total_value / original_total_value
+
+        # If the ratio is too extreme (more than 50% change), scale all values back
+        if ratio > 1.5 or ratio < 0.5:
+            scaling_factor = 1.0 / ratio
+            noisy_df['Value'] = noisy_df['Value'] * scaling_factor
+            # Also adjust prices to match the scaled values
+            noisy_df['Price'] = noisy_df['Value'] / noisy_df['Quantity']
 
     # Recalculate derived columns
     noisy_df['Hour'] = noisy_df['Time'].dt.hour
