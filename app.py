@@ -415,7 +415,7 @@ with st.sidebar:
             noise_level = st.slider(
                 "Price noise level (%)",
                 min_value=0.5,
-                max_value=5,
+                max_value=5.0,  # Changed to float
                 value=2.0,
                 step=0.5,
                 help="Amount of random price variation to add (realistic: 1-3%)"
@@ -431,10 +431,10 @@ with st.sidebar:
             if modify_order_count:
                 order_variation = st.slider(
                     "Order variation (%)",
-                    min_value=2,
-                    max_value=20,
-                    value=5,
-                    step=1,
+                    min_value=2.0,  # Changed to float
+                    max_value=20.0,  # Changed to float
+                    value=5.0,  # Changed to float
+                    step=1.0,  # Changed to float
                     help="Percentage of orders to add/remove (realistic: 5-10%)"
                 ) / 100
 
@@ -508,9 +508,10 @@ with st.sidebar:
 
     time_window = st.slider(
         "Time window for matching (minutes)",
-        min_value=1,
-        max_value=30,
-        value=5,
+        min_value=1.0,  # Changed to float
+        max_value=30.0,  # Changed to float
+        value=5.0,  # Changed to float
+        step=1.0,  # Added step as float
         help="Maximum time difference to consider orders as matching"
     )
 
