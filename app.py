@@ -122,27 +122,34 @@ st.markdown("---")
 
 
 # Function to generate synthetic data with noise
-def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2):
-    """Generate a synthetic dataset based on original with added noise"""
+def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2, modify_order_count=True):
+    """
+    Generate a synthetic dataset based on original with added noise
+
+    Parameters:
+    - noise_level: Amount of price noise (0.05 = 5%)
+    - order_variation: Percentage of orders to add/remove if modify_order_count is True
+    - modify_order_count: If True, add/remove orders. If False, keep same number of orders
+    """
     noisy_df = original_df.copy()
 
     # Add small price noise using normal distribution
     if 'Price' in noisy_df.columns:
         # Generate small random variations for each price
-        price_multipliers = 1 + np.random.normal(0, noise_level, len(noisy_df))
-        # Clip to avoid extreme values (max ±3 sigma)
-        price_multipliers = np.clip(price_multipliers, 1 - 3 * noise_level, 1 + 3 * noise_level)
+        price_multipliers = 1 + np.random.normal(0, noise_level / 2, len(noisy_df))  # Reduced variance
+        # Clip to avoid extreme values (max ±1.5 sigma)
+        price_multipliers = np.clip(price_multipliers, 1 - noise_level, 1 + noise_level)
         noisy_df['Price'] = noisy_df['Price'] * price_multipliers
 
     # Keep quantities mostly identical, only change a few
     if 'Quantity' in noisy_df.columns:
-        # Only modify 20% of quantities
-        n_to_modify = int(len(noisy_df) * 0.2)
+        # Only modify 5% of quantities (reduced from 10%)
+        n_to_modify = int(len(noisy_df) * 0.05)
         if n_to_modify > 0:
             indices_to_modify = np.random.choice(noisy_df.index, size=n_to_modify, replace=False)
             for idx in indices_to_modify:
-                # Small change: ±10% max
-                qty_multiplier = np.random.uniform(0.9, 1.1)
+                # Even smaller change: ±2% max
+                qty_multiplier = np.random.uniform(0.98, 1.02)
                 noisy_df.loc[idx, 'Quantity'] = max(1, int(noisy_df.loc[idx, 'Quantity'] * qty_multiplier))
 
     # Recalculate Value to be consistent
@@ -158,7 +165,7 @@ def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2):
 
     # Randomly change a few order statuses
     if 'Status' in noisy_df.columns:
-        n_status_changes = int(len(noisy_df) * 0.05)  # Change 5% of statuses
+        n_status_changes = int(len(noisy_df) * 0.03)  # Change 3% of statuses
         if n_status_changes > 0:
             indices_to_change = np.random.choice(noisy_df.index, size=n_status_changes, replace=False)
             statuses = ['Filled', 'Partial', 'Cancelled']
@@ -169,38 +176,57 @@ def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2):
                 if new_statuses:
                     noisy_df.loc[idx, 'Status'] = np.random.choice(new_statuses)
 
-    # Remove some orders (based on order_variation parameter)
-    n_to_remove = int(len(noisy_df) * order_variation * 0.5)
-    if n_to_remove > 0 and len(noisy_df) > n_to_remove + 10:  # Keep at least 10 orders
-        indices_to_remove = np.random.choice(noisy_df.index, size=n_to_remove, replace=False)
-        noisy_df = noisy_df.drop(indices_to_remove)
+    # Only modify order count if requested
+    if modify_order_count and order_variation > 0:
+        # Remove some orders
+        n_to_remove = int(len(noisy_df) * order_variation * 0.4)  # Remove 40% of the variation
+        if n_to_remove > 0 and len(noisy_df) > n_to_remove + 10:  # Keep at least 10 orders
+            indices_to_remove = np.random.choice(noisy_df.index, size=n_to_remove, replace=False)
+            noisy_df = noisy_df.drop(indices_to_remove)
 
-    # Add some new orders (duplicate and modify existing ones)
-    n_to_add = int(len(original_df) * order_variation * 0.5)
-    if n_to_add > 0:
-        # Select random orders to duplicate
-        indices_to_dup = np.random.choice(noisy_df.index, size=min(n_to_add, len(noisy_df)), replace=True)
-        new_orders = noisy_df.loc[indices_to_dup].copy()
+        # Add some new orders (duplicate and modify existing ones)
+        n_to_add = int(len(original_df) * order_variation * 0.4)  # Add 40% of the variation
+        if n_to_add > 0:
+            # Select random orders to duplicate - limit severely to avoid huge volume increase
+            max_to_add = max(1, min(n_to_add, len(noisy_df) // 30))  # Maximum 3.3% more orders
+            indices_to_dup = np.random.choice(noisy_df.index, size=max_to_add, replace=True)
+            new_orders = noisy_df.loc[indices_to_dup].copy()
 
-        # Modify the duplicated orders slightly
-        if len(new_orders) > 0:
-            # Small price changes
-            new_orders['Price'] = new_orders['Price'] * (1 + np.random.normal(0, noise_level / 2, len(new_orders)))
-            # Small quantity changes
-            qty_changes = np.random.uniform(0.95, 1.05, len(new_orders))
-            new_orders['Quantity'] = (new_orders['Quantity'] * qty_changes).astype(int).clip(lower=1)
-            # Recalculate value
-            new_orders['Value'] = new_orders['Price'] * new_orders['Quantity']
-            # Shift times a bit more for new orders
-            for idx in new_orders.index:
-                new_orders.loc[idx, 'Time'] = new_orders.loc[idx, 'Time'] + pd.Timedelta(
-                    minutes=np.random.randint(1, 20))
+            # Modify the duplicated orders very slightly
+            if len(new_orders) > 0:
+                # Minimal price changes
+                for idx in new_orders.index:
+                    price_var = np.random.uniform(-noise_level / 3, noise_level / 3)
+                    new_orders.loc[idx, 'Price'] = new_orders.loc[idx, 'Price'] * (1 + price_var)
+                    # Keep most quantities the same
+                    if np.random.random() < 0.2:  # Only change 20% of quantities
+                        new_orders.loc[idx, 'Quantity'] = max(1, int(
+                            new_orders.loc[idx, 'Quantity'] * np.random.uniform(0.99, 1.01)))
+                    # Shift time
+                    new_orders.loc[idx, 'Time'] = new_orders.loc[idx, 'Time'] + pd.Timedelta(
+                        minutes=np.random.randint(5, 30))
 
-            # Combine with original
-            noisy_df = pd.concat([noisy_df, new_orders], ignore_index=True)
+                # Recalculate value
+                new_orders['Value'] = new_orders['Price'] * new_orders['Quantity']
+
+                # Combine with original
+                noisy_df = pd.concat([noisy_df, new_orders], ignore_index=True)
 
     # Sort by time and reset index
     noisy_df = noisy_df.sort_values('Time').reset_index(drop=True)
+
+    # Final safety check: ensure total volume hasn't changed too much
+    if 'Value' in noisy_df.columns and 'Value' in original_df.columns:
+        original_total = original_df['Value'].sum()
+        new_total = noisy_df['Value'].sum()
+        if original_total > 0:
+            ratio = new_total / original_total
+            # If volume changed by more than 20%, scale it back
+            if ratio > 1.2 or ratio < 0.8:
+                scale_factor = 1.0 / ratio
+                # Adjust prices to bring volume back in line
+                noisy_df['Price'] = noisy_df['Price'] * scale_factor
+                noisy_df['Value'] = noisy_df['Price'] * noisy_df['Quantity']
 
     # Recalculate derived columns
     if 'Time' in noisy_df.columns:
@@ -388,46 +414,64 @@ with st.sidebar:
         if st.checkbox("Generate synthetic comparison data"):
             noise_level = st.slider(
                 "Price noise level (%)",
-                min_value=1,
-                max_value=10,
-                value=3,
-                help="Amount of random price variation to add (realistic: 2-5%)"
+                min_value=0.5,
+                max_value=5,
+                value=2.0,
+                step=0.5,
+                help="Amount of random price variation to add (realistic: 1-3%)"
             ) / 100
 
-            order_variation = st.slider(
-                "Order variation (%)",
-                min_value=5,
-                max_value=30,
-                value=10,
-                help="Percentage of orders to add/remove (realistic: 10-20%)"
-            ) / 100
+            modify_order_count = st.checkbox(
+                "Modify number of orders",
+                value=False,
+                help="If checked, will add/remove orders. If unchecked, keeps same order structure"
+            )
 
-            if noise_level > 0.05:
-                st.warning("⚠️ High noise levels (>5%) may create unrealistic differences")
+            order_variation = 0
+            if modify_order_count:
+                order_variation = st.slider(
+                    "Order variation (%)",
+                    min_value=2,
+                    max_value=20,
+                    value=5,
+                    step=1,
+                    help="Percentage of orders to add/remove (realistic: 5-10%)"
+                ) / 100
+
+            if noise_level > 0.03:
+                st.warning("⚠️ High noise levels (>3%) may create unrealistic differences")
 
             if st.button("🎲 Generate Test Data"):
                 if demo_file and not live_file:
                     # Load demo file and generate synthetic live data
                     source_df = load_data(demo_file)
                     if source_df is not None:
-                        st.session_state.synthetic_live = generate_noisy_data(source_df, noise_level, order_variation)
+                        st.session_state.synthetic_live = generate_noisy_data(source_df, noise_level, order_variation,
+                                                                              modify_order_count)
                         original_volume = source_df['Value'].sum()
                         synthetic_volume = st.session_state.synthetic_live['Value'].sum()
                         volume_diff = ((synthetic_volume / original_volume - 1) * 100)
                         st.success(f"✅ Synthetic LIVE data generated!")
-                        st.info(
-                            f"📊 Volume difference: {volume_diff:+.1f}% | Orders: {len(source_df)} → {len(st.session_state.synthetic_live)}")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Volume Change", f"{volume_diff:+.1f}%")
+                        with col2:
+                            st.metric("Orders", f"{len(source_df)} → {len(st.session_state.synthetic_live)}")
                 elif live_file and not demo_file:
                     # Load live file and generate synthetic demo data
                     source_df = load_data(live_file)
                     if source_df is not None:
-                        st.session_state.synthetic_demo = generate_noisy_data(source_df, noise_level, order_variation)
+                        st.session_state.synthetic_demo = generate_noisy_data(source_df, noise_level, order_variation,
+                                                                              modify_order_count)
                         original_volume = source_df['Value'].sum()
                         synthetic_volume = st.session_state.synthetic_demo['Value'].sum()
                         volume_diff = ((synthetic_volume / original_volume - 1) * 100)
                         st.success(f"✅ Synthetic DEMO data generated!")
-                        st.info(
-                            f"📊 Volume difference: {volume_diff:+.1f}% | Orders: {len(source_df)} → {len(st.session_state.synthetic_demo)}")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Volume Change", f"{volume_diff:+.1f}%")
+                        with col2:
+                            st.metric("Orders", f"{len(source_df)} → {len(st.session_state.synthetic_demo)}")
     elif not demo_file and not live_file:
         st.info("📁 Please upload at least one CSV file to begin")
     else:
