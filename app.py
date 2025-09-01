@@ -187,7 +187,7 @@ def generate_noisy_data(original_df, noise_level=0.05, order_variation=0.2):
             duplicated.loc[idx, 'Quantity'] = duplicated.loc[idx, 'Quantity'] + np.random.choice([-1, 0, 1])
             duplicated.loc[idx, 'Quantity'] = max(1, duplicated.loc[idx, 'Quantity'])
             # Shift time slightly
-            duplicated.loc[idx, 'Time'] = duplicated.loc[idx, 'Time'] + pd.timedelta(minutes=np.random.randint(5, 30))
+            duplicated.loc[idx, 'Time'] = duplicated.loc[idx, 'Time'] + pd.Timedelta(minutes=np.random.randint(5, 30))
 
         # Recalculate Value for duplicated orders
         duplicated['Value'] = duplicated['Price'] * duplicated['Quantity']
